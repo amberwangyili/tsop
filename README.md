@@ -18,7 +18,7 @@
 pip install tsop
 
 # From source
-git clone https://github.com/yourname/tsop.git
+git clone git@github.com:amberwangyili/tsop.git
 cd tsop
 pip install .
 ```
@@ -39,7 +39,7 @@ M = ts_mean(A, days=5)   # 5-day rolling mean
 
 ```bash
 # install dev dependencies
-pip install -r requirements-dev.txt
+pip install -r requirements.txt
 
 # lint & format
 make fmt
