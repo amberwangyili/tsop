@@ -19,7 +19,7 @@ jobs:
         python-version: ${{ matrix.python }}
     - name: Install build deps
       run: |
-        python -m pip install --upgrade pip setuptools wheel cython numpy
+        python -m pip install --upgrade pip setuptools wheel cython numpy pytest
     - name: Build & install
       run: |
         pip install .
