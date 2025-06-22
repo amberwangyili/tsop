@@ -14,9 +14,6 @@
 ## Installation
 
 ```bash
-# From PyPI
-pip install tsop
-
 # From source
 git clone git@github.com:amberwangyili/tsop.git
 cd tsop
