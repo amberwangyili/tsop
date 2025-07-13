@@ -10,7 +10,73 @@
 #include <vector>
 
 namespace tsop {
-
+/**
+ * @brief Computes the rolling relative index of the maximum value in a window.
+ *
+ * For each rolling window, finds the maximum value and then searches backward to
+ * locate the nearest occurrence of that maximum. It outputs the number of steps from the
+ * current day to that maximum (0 means the maximum occurs on the current day, 1 means one day ago, etc.).
+ * Outputs NaN for positions with insufficient data.
+ *
+ * @param A Input array, shape (n, d)
+ * @param V Output array, shape (n, d), where the relative indices will be stored.
+ * @param n Number of rows
+ * @param d Number of columns
+ * @param days Window size (number of days)
+ *
+ * @example
+ * ```cpp
+ * double input[2][5] = {
+ *   { 2, 0, 3, 1, 4 },
+ *   { 1, 2, 3, 0, 5 }
+ * };
+ * double output[2][5];
+ * int days = 4;
+ * ts_argmax_c(&input[0][0], &output[0][0], 2, 5, days);
+ * // Expected output:
+ * // output = {
+ * //   { NAN, NAN, NAN,  1,  0 },
+ * //   { NAN, NAN, NAN,  1,  0 }
+ * // };
+ * ```
+ */
+inline void ts_argmax_c(const double* A, double* V, int n, int d, int days) {
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j < d; ++j) {
+            // Check if we have a full window; if not, output NaN.
+            if (j < days - 1) {
+                V[i * d + j] = NAN;
+                continue;
+            }
+            int window_start = j - days + 1;
+            double max_val = -INFINITY;
+            // Find the maximum value in the current window.
+            for (int k = window_start; k <= j; ++k) {
+                double val = A[i * d + k];
+                if (!std::isnan(val) && val > max_val) {
+                    max_val = val;
+                }
+            }
+            // If no valid value is found, output NaN.
+            if (max_val == -INFINITY) {
+                V[i * d + j] = NAN;
+                continue;
+            }
+            // Search backward for the nearest occurrence of the maximum value.
+            int best_index = j;
+            for (int k = j; k >= window_start; --k) {
+                double val = A[i * d + k];
+                if (!std::isnan(val) && val == max_val) {
+                    best_index = k;
+                    break;
+                }
+            }
+            // Relative index: difference in steps from current day.
+            V[i * d + j] = (j - best_index) / static_cast<double>(days - 1);
+        }
+    }
+}
+    
 /**
  * @brief Computes column-wise z-scores for stock values.
  *

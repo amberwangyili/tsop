@@ -49,12 +49,37 @@ cdef extern from "basic.h" namespace "tsop":
     void cs_scale_c(const double* A, double* V, int n, int d)
     void cs_winsor_c(const double* A, double* V, int n, int d, double filter_percentile, bint remove_extreme)
     void cs_zscore_c(const double* A, double* V, int n, int d)
+    void ts_argmax_c(const double* A, double* V, int n, int d, int days)
 
 import numpy as np
 
 cimport numpy as np
 from cython cimport numeric
 
+def ts_argmax(np.ndarray[numeric, ndim=2] A, int days):
+    """
+    Python wrapper for the ts_argmax C++ function adapted for 2D arrays.
+
+    Calculates how far away from now the last max value was in the past `days`.
+    """
+    if not A.flags['C_CONTIGUOUS']:
+        A = np.ascontiguousarray(A)
+    cdef np.ndarray[np.double_t, ndim=2, mode='c'] A_c
+    if A.dtype != np.float64:
+        A_temp = np.array(A, dtype=np.float64, copy=True)
+        A_c = A_temp
+    else:
+        A_c = A
+
+    cdef int n = A_c.shape[0]
+    cdef int d = A_c.shape[1]
+    cdef np.ndarray[np.double_t, ndim=2, mode='c'] V = np.empty((n, d), dtype=np.float64)
+
+    cdef double* A_data = &A_c[0, 0]
+    cdef double* V_data = &V[0, 0]
+
+    ts_argmax_c(A_data, V_data, n, d, days)
+    return V
 
 def cs_zscore(np.ndarray[numeric, ndim=2] A):
     """
