@@ -8,11 +8,26 @@ from setuptools import Extension, setup
 is_windows = sys.platform.startswith("win")
 
 # MSVC flags work for x86, x64 and ARM on Windows
-msvc_compile_args = ["/std:c++17", "/EHsc"]
+msvc_compile_args = ["/std:c++17", "/EHsc", "/openmp"]
+msvc_link_args = []
+
 # GCC/Clang flags for Unix-like systems
 unix_compile_args = ["-std=c++17", "-Wall", "-Wextra", "-O3"]
+unix_link_args = ["-g"]
 
-compile_args = msvc_compile_args if is_windows else unix_compile_args
+if is_windows:
+    compile_args = msvc_compile_args
+    link_args = msvc_link_args
+else:
+    compile_args = unix_compile_args.copy()
+    link_args = unix_link_args.copy()
+
+    if sys.platform == "darwin":
+        compile_args.extend(["-Xpreprocessor", "-fopenmp"])
+        link_args.extend(["-lomp", "-fopenmp"])
+    else:
+        compile_args.append("-fopenmp")
+        link_args.append("-fopenmp")
 
 extensions = [
     Extension(
@@ -21,7 +36,7 @@ extensions = [
         include_dirs=[np.get_include()],
         language="c++",
         extra_compile_args=compile_args,
-        extra_link_args=["-g"],
+        extra_link_args=link_args,
     )
 ]
 

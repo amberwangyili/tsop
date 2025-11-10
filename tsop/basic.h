@@ -9,8 +9,84 @@
 #include <utility>
 #include <vector>
 
-namespace tsop {
+#if defined(_OPENMP)
+#include <omp.h>
+#define TSOP_PARALLEL_FOR _Pragma("omp parallel for schedule(static)")
+#define TSOP_PARALLEL_FOR_COLLAPSE2 _Pragma("omp parallel for collapse(2) schedule(static)")
+#else
+#define TSOP_PARALLEL_FOR
+#define TSOP_PARALLEL_FOR_COLLAPSE2
+#endif
 
+namespace tsop {
+/**
+ * @brief Computes the rolling relative index of the maximum value in a window.
+ *
+ * For each rolling window, finds the maximum value and then searches backward to
+ * locate the nearest occurrence of that maximum. It outputs the number of steps from the
+ * current day to that maximum (0 means the maximum occurs on the current day, 1 means one day ago, etc.).
+ * Outputs NaN for positions with insufficient data.
+ *
+ * @param A Input array, shape (n, d)
+ * @param V Output array, shape (n, d), where the relative indices will be stored.
+ * @param n Number of rows
+ * @param d Number of columns
+ * @param days Window size (number of days)
+ *
+ * @example
+ * ```cpp
+ * double input[2][5] = {
+ *   { 2, 0, 3, 1, 4 },
+ *   { 1, 2, 3, 0, 5 }
+ * };
+ * double output[2][5];
+ * int days = 4;
+ * ts_argmax_c(&input[0][0], &output[0][0], 2, 5, days);
+ * // Expected output:
+ * // output = {
+ * //   { NAN, NAN, NAN,  1,  0 },
+ * //   { NAN, NAN, NAN,  1,  0 }
+ * // };
+ * ```
+ */
+inline void ts_argmax_c(const double* A, double* V, int n, int d, int days) {
+    TSOP_PARALLEL_FOR
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j < d; ++j) {
+            // Check if we have a full window; if not, output NaN.
+            if (j < days - 1) {
+                V[i * d + j] = NAN;
+                continue;
+            }
+            int window_start = j - days + 1;
+            double max_val = -INFINITY;
+            // Find the maximum value in the current window.
+            for (int k = window_start; k <= j; ++k) {
+                double val = A[i * d + k];
+                if (!std::isnan(val) && val > max_val) {
+                    max_val = val;
+                }
+            }
+            // If no valid value is found, output NaN.
+            if (max_val == -INFINITY) {
+                V[i * d + j] = NAN;
+                continue;
+            }
+            // Search backward for the nearest occurrence of the maximum value.
+            int best_index = j;
+            for (int k = j; k >= window_start; --k) {
+                double val = A[i * d + k];
+                if (!std::isnan(val) && val == max_val) {
+                    best_index = k;
+                    break;
+                }
+            }
+            // Relative index: difference in steps from current day.
+            V[i * d + j] = (j - best_index) / static_cast<double>(days - 1);
+        }
+    }
+}
+    
 /**
  * @brief Computes column-wise z-scores for stock values.
  *
@@ -53,6 +129,7 @@ namespace tsop {
  * ```
  */
 inline void cs_zscore_c(const double* A, double* V, int n, int d) {
+    TSOP_PARALLEL_FOR
     for (int j = 0; j < d; ++j) {  // Iterate over columns (days)
         // Collect valid values in column j
         std::vector<double> values;
@@ -158,6 +235,7 @@ inline void cs_zscore_c(const double* A, double* V, int n, int d) {
  */
 inline void cs_winsor_c(const double* A, double* V, int n, int d, double filter_percentile,
                         bool remove_extreme) {
+    TSOP_PARALLEL_FOR
     for (int j = 0; j < d; ++j) {  // Iterate over columns (days)
         // Collect valid values and their indices
         std::vector<std::pair<double, int>> values;  // Pair of (value, row index)
@@ -267,6 +345,7 @@ inline void cs_winsor_c(const double* A, double* V, int n, int d, double filter_
  * ```
  */
 inline void cs_scale_c(const double* A, double* V, int n, int d) {
+    TSOP_PARALLEL_FOR
     for (int j = 0; j < d; ++j) {  // Iterate over columns (days)
         // Collect the valid (finite and not NaN) values and their indices
         std::vector<std::pair<double, int>> values;  // Pair of (value, row index)
@@ -355,6 +434,7 @@ inline void cs_scale_c(const double* A, double* V, int n, int d) {
  * ```
  */
 inline void cs_remove_middle_c(const double* A, double* V, int n, int d, double filter_percentile) {
+    TSOP_PARALLEL_FOR
     for (int j = 0; j < d; ++j) {  // Iterate over columns (days)
         // Collect the non-NaN and finite values for this column
         std::vector<std::pair<double, int>> values;  // Pair of (value, row index)
@@ -456,6 +536,7 @@ inline void cs_remove_middle_c(const double* A, double* V, int n, int d, double 
  * ```
  */
 inline void cs_rank_c(const double* A, double* V, int n, int d) {
+    TSOP_PARALLEL_FOR
     for (int j = 0; j < d; ++j) {  // Iterate over columns (days)
         // Collect the non-NaN and finite values for this column
         std::vector<std::pair<double, int>> values;  // Pair of (value, row index)
@@ -548,6 +629,7 @@ inline void cs_rank_c(const double* A, double* V, int n, int d) {
  * ```
  */
 inline void at_nan2zero_c(const double* A, double* V, int n, int d) {
+    TSOP_PARALLEL_FOR
     for (int i = 0; i < n * d; ++i) {
         V[i] = std::isfinite(A[i]) ? A[i] : 0.0;
     }
@@ -582,6 +664,7 @@ inline void at_nan2zero_c(const double* A, double* V, int n, int d) {
  * ```
  */
 inline void at_zero2nan_c(const double* A, double* V, int n, int d) {
+    TSOP_PARALLEL_FOR
     for (int i = 0; i < n * d; ++i) {
         V[i] = (A[i] == 0.0) ? NAN : A[i];
     }
@@ -617,6 +700,7 @@ inline void at_zero2nan_c(const double* A, double* V, int n, int d) {
  * ```
  */
 inline void at_signlog_c(const double* A, double* V, int n, int d) {
+    TSOP_PARALLEL_FOR
     for (int i = 0; i < n * d; ++i) {
         if (std::isnan(A[i]) || std::isinf(A[i])) {
             V[i] = NAN;
@@ -656,6 +740,7 @@ inline void at_signlog_c(const double* A, double* V, int n, int d) {
  * ```
  */
 inline void at_signsqrt_c(const double* A, double* V, int n, int d) {
+    TSOP_PARALLEL_FOR
     for (int i = 0; i < n * d; ++i) {
         if (std::isnan(A[i]) || std::isinf(A[i])) {
             V[i] = NAN;
@@ -707,6 +792,7 @@ inline void at_signsqrt_c(const double* A, double* V, int n, int d) {
  */
 inline void ts_std_normalized_c(const double* A, double* V, std::size_t n, std::size_t d,
                                 int days) {
+    TSOP_PARALLEL_FOR
     for (std::size_t i = 0; i < n; ++i) {      // Iterate over rows
         for (std::size_t j = 0; j < d; ++j) {  // Iterate over columns
             double current_value = A[i * d + j];
@@ -795,6 +881,7 @@ inline void ts_std_normalized_c(const double* A, double* V, std::size_t n, std::
  */
 inline void ts_zscore_c(const double* A, double* V, std::size_t n, std::size_t d,
                         std::size_t days) {
+    TSOP_PARALLEL_FOR
     for (size_t i = 0; i < n; ++i) {  // Iterate over rows
         const double* row = A + i * d;
         double* v_row = V + i * d;
@@ -879,6 +966,7 @@ inline void ts_zscore_c(const double* A, double* V, std::size_t n, std::size_t d
  * ```
  */
 inline void ts_delay_c(const double* A, double* V, int n, int d, int days) {
+    TSOP_PARALLEL_FOR
     for (int i = 0; i < n; ++i) {
         const double* A_row = A + i * d;
         double* V_row = V + i * d;
@@ -924,6 +1012,7 @@ inline void ts_delay_c(const double* A, double* V, int n, int d, int days) {
  * ```
  */
 inline void ts_min_c(const double* A, double* V, int n, int d, int days) {
+    TSOP_PARALLEL_FOR
     for (int i = 0; i < n; ++i) {      // Rows
         for (int t = 0; t < d; ++t) {  // Columns
             if (!std::isfinite(A[i * d + t])) {
@@ -986,6 +1075,7 @@ inline void ts_min_c(const double* A, double* V, int n, int d, int days) {
  * ```
  */
 inline void ts_median_c(const double* A, double* V, int n, int d, int days) {
+    TSOP_PARALLEL_FOR
     for (int i = 0; i < n; ++i) {      // Rows
         for (int t = 0; t < d; ++t) {  // Columns
             if (std::isnan(A[i * d + t])) {
@@ -1050,6 +1140,7 @@ inline void ts_median_c(const double* A, double* V, int n, int d, int days) {
  * ```
  */
 inline void ts_mean_c(const double* A, double* V, int n, int d, int days) {
+    TSOP_PARALLEL_FOR
     for (int i = 0; i < n; ++i) {      // Rows
         for (int t = 0; t < d; ++t) {  // Columns
             if (!std::isfinite(A[i * d + t])) {
@@ -1109,6 +1200,7 @@ inline void ts_mean_c(const double* A, double* V, int n, int d, int days) {
  * ```
  */
 inline void ts_max_c(const double* A, double* V, int n, int d, int days) {
+    TSOP_PARALLEL_FOR
     for (int i = 0; i < n; ++i) {      // Rows
         for (int t = 0; t < d; ++t) {  // Columns
             if (!std::isfinite(A[i * d + t])) {
@@ -1168,6 +1260,7 @@ inline void ts_max_c(const double* A, double* V, int n, int d, int days) {
  * ```
  */
 inline void ts_fill_c(const double* A, double* V, int n, int d) {
+    TSOP_PARALLEL_FOR
     for (int i = 0; i < n; ++i) {
         const double* A_row = A + i * d;
         double* V_row = V + i * d;
@@ -1218,6 +1311,7 @@ inline void ts_fill_c(const double* A, double* V, int n, int d) {
  * ```
  */
 inline void ts_mean_exp_c(const double* A, double* V, int n, int d, int days, double exp_factor) {
+    TSOP_PARALLEL_FOR
     for (int i = 0; i < n; ++i) {      // Iterate over rows
         for (int t = 0; t < d; ++t) {  // Iterate over columns
             int window_start = std::max(0, t - days + 1);
@@ -1298,6 +1392,7 @@ inline void ts_mean_exp_c(const double* A, double* V, int n, int d, int days, do
 inline void ts_diff_c(const double* A, double* V, size_t n_rows, size_t n_cols, int order) {
     // Base case: order == 1
     if (order == 1) {
+        TSOP_PARALLEL_FOR
         for (size_t i = 0; i < n_rows; ++i) {
             V[i * n_cols + 0] = NAN;  // First element is NaN
             for (size_t j = 1; j < n_cols; ++j) {
@@ -1373,6 +1468,7 @@ inline void ts_diff_c(const double* A, double* V, size_t n_rows, size_t n_cols, 
  */
 inline void ts_corr_binary_c(const double* A, const double* B, double* V, int n, int d, int days) {
     // For each row
+    TSOP_PARALLEL_FOR
     for (int i = 0; i < n; ++i) {
         // For each column
         for (int t = 0; t < d; ++t) {
@@ -1459,6 +1555,7 @@ inline void ts_corr_binary_c(const double* A, const double* B, double* V, int n,
  * ```
  */
 inline void ts_sum_c(const double* A, double* V, int n, int d, int days) {
+    TSOP_PARALLEL_FOR
     for (int i = 0; i < n; ++i) {  // Iterate over each row
         // Initialize cumulative sum array for the current row
         std::vector<double> cumulative_sum(d + 1, 0.0);
@@ -1509,6 +1606,7 @@ inline void ts_sum_c(const double* A, double* V, int n, int d, int days) {
  * ```
  */
 inline void ts_std_c(const double* A, double* V, size_t n, size_t d, int days) {
+    TSOP_PARALLEL_FOR
     for (size_t i = 0; i < n; ++i) {      // Iterate over rows
         for (size_t j = 0; j < d; ++j) {  // Iterate over columns
             int window_start = static_cast<int>(j) - days + 1;
@@ -1587,6 +1685,7 @@ inline void ts_std_c(const double* A, double* V, size_t n, size_t d, int days) {
  * ```
  */
 inline void ts_skew_c(const double* A, double* V, int n, int d, int days) {
+    TSOP_PARALLEL_FOR
     for (int i = 0; i < n; ++i) {
         const double* A_row = A + i * d;
         double* V_row = V + i * d;
@@ -1676,6 +1775,7 @@ inline void ts_skew_c(const double* A, double* V, int n, int d, int days) {
  * ```
  */
 inline void ts_rank_c(const double* A, double* V, int n, int d, int days) {
+    TSOP_PARALLEL_FOR
     for (int i = 0; i < n; ++i) {
         const double* A_row = A + i * d;
         double* V_row = V + i * d;
