@@ -4,10 +4,16 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstring>
+#include <map>
 #include <numeric>
 #include <set>
 #include <utility>
 #include <vector>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 namespace tsop {
 
@@ -52,7 +58,8 @@ namespace tsop {
  * // };
  * ```
  */
-inline void cs_zscore_c(const double* A, double* V, int n, int d) {
+template<typename T>
+inline void cs_zscore_c(const T* A, T* V, int n, int d) {
     for (int j = 0; j < d; ++j) {  // Iterate over columns (days)
         // Collect valid values in column j
         std::vector<double> values;
@@ -156,7 +163,8 @@ inline void cs_zscore_c(const double* A, double* V, int n, int d) {
  * // };
  * ```
  */
-inline void cs_winsor_c(const double* A, double* V, int n, int d, double filter_percentile,
+template<typename T>
+inline void cs_winsor_c(const T* A, T* V, int n, int d, double filter_percentile,
                         bool remove_extreme) {
     for (int j = 0; j < d; ++j) {  // Iterate over columns (days)
         // Collect valid values and their indices
@@ -266,7 +274,8 @@ inline void cs_winsor_c(const double* A, double* V, int n, int d, double filter_
  * // };
  * ```
  */
-inline void cs_scale_c(const double* A, double* V, int n, int d) {
+template<typename T>
+inline void cs_scale_c(const T* A, T* V, int n, int d) {
     for (int j = 0; j < d; ++j) {  // Iterate over columns (days)
         // Collect the valid (finite and not NaN) values and their indices
         std::vector<std::pair<double, int>> values;  // Pair of (value, row index)
@@ -354,7 +363,8 @@ inline void cs_scale_c(const double* A, double* V, int n, int d) {
  * // };
  * ```
  */
-inline void cs_remove_middle_c(const double* A, double* V, int n, int d, double filter_percentile) {
+template<typename T>
+inline void cs_remove_middle_c(const T* A, T* V, int n, int d, double filter_percentile) {
     for (int j = 0; j < d; ++j) {  // Iterate over columns (days)
         // Collect the non-NaN and finite values for this column
         std::vector<std::pair<double, int>> values;  // Pair of (value, row index)
@@ -455,7 +465,8 @@ inline void cs_remove_middle_c(const double* A, double* V, int n, int d, double 
  * // };
  * ```
  */
-inline void cs_rank_c(const double* A, double* V, int n, int d) {
+template<typename T>
+inline void cs_rank_c(const T* A, T* V, int n, int d) {
     for (int j = 0; j < d; ++j) {  // Iterate over columns (days)
         // Collect the non-NaN and finite values for this column
         std::vector<std::pair<double, int>> values;  // Pair of (value, row index)
@@ -547,7 +558,8 @@ inline void cs_rank_c(const double* A, double* V, int n, int d) {
  * // };
  * ```
  */
-inline void at_nan2zero_c(const double* A, double* V, int n, int d) {
+template<typename T>
+inline void at_nan2zero_c(const T* A, T* V, int n, int d) {
     for (int i = 0; i < n * d; ++i) {
         V[i] = std::isfinite(A[i]) ? A[i] : 0.0;
     }
@@ -581,7 +593,8 @@ inline void at_nan2zero_c(const double* A, double* V, int n, int d) {
  * // };
  * ```
  */
-inline void at_zero2nan_c(const double* A, double* V, int n, int d) {
+template<typename T>
+inline void at_zero2nan_c(const T* A, T* V, int n, int d) {
     for (int i = 0; i < n * d; ++i) {
         V[i] = (A[i] == 0.0) ? NAN : A[i];
     }
@@ -616,7 +629,8 @@ inline void at_zero2nan_c(const double* A, double* V, int n, int d) {
  * // };
  * ```
  */
-inline void at_signlog_c(const double* A, double* V, int n, int d) {
+template<typename T>
+inline void at_signlog_c(const T* A, T* V, int n, int d) {
     for (int i = 0; i < n * d; ++i) {
         if (std::isnan(A[i]) || std::isinf(A[i])) {
             V[i] = NAN;
@@ -655,7 +669,8 @@ inline void at_signlog_c(const double* A, double* V, int n, int d) {
  * // };
  * ```
  */
-inline void at_signsqrt_c(const double* A, double* V, int n, int d) {
+template<typename T>
+inline void at_signsqrt_c(const T* A, T* V, int n, int d) {
     for (int i = 0; i < n * d; ++i) {
         if (std::isnan(A[i]) || std::isinf(A[i])) {
             V[i] = NAN;
@@ -705,57 +720,34 @@ inline void at_signsqrt_c(const double* A, double* V, int n, int d) {
  * // };
  * ```
  */
-inline void ts_std_normalized_c(const double* A, double* V, std::size_t n, std::size_t d,
+template<typename T>
+inline void ts_std_normalized_c(const T* A, T* V, std::size_t n, std::size_t d,
                                 int days) {
-    for (std::size_t i = 0; i < n; ++i) {      // Iterate over rows
-        for (std::size_t j = 0; j < d; ++j) {  // Iterate over columns
-            double current_value = A[i * d + j];
-            if (std::isnan(current_value)) {
-                V[i * d + j] = NAN;
-                continue;
+    // Incremental: window [max(0,j-days+1), j], output NaN if total count <= 2
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(static)
+    #endif
+    for (std::size_t i = 0; i < n; ++i) {
+        const double* row = A + i * d;
+        double* v_row = V + i * d;
+        double sum = 0.0, sum_sq = 0.0;
+        int valid = 0, total = 0;
+
+        for (std::size_t j = 0; j < d; ++j) {
+            double val_in = row[j];
+            total++;
+            if (std::isfinite(val_in)) { sum += val_in; sum_sq += val_in * val_in; valid++; }
+            // Remove leaving element
+            if (static_cast<int>(j) >= days) {
+                double val_out = row[j - days];
+                total--;
+                if (std::isfinite(val_out)) { sum -= val_out; sum_sq -= val_out * val_out; valid--; }
             }
 
-            int window_start = std::max(0, static_cast<int>(j) - days + 1);
-            int window_end = static_cast<int>(j);
-
-            std::vector<double> window_values;
-            int count = 0;
-            for (int k = window_start; k <= window_end; ++k) {
-                double val = A[i * d + k];
-                count++;
-                if (std::isfinite(val)) {
-                    window_values.push_back(val);
-                }
-            }
-
-            if (count <= 2) {
-                V[i * d + j] = NAN;
-                continue;
-            }
-
-            // Compute mean
-            double sum = 0.0;
-            for (double val : window_values) {
-                sum += val;
-            }
-            double mean = sum / window_values.size();
-
-            // Compute variance (sample variance with n - 1 denominator)
-            double sq_diff_sum = 0.0;
-            for (double val : window_values) {
-                double diff = val - mean;
-                sq_diff_sum += diff * diff;
-            }
-            double variance = sq_diff_sum / (window_values.size() - 1);
-
-            if (variance == 0.0) {
-                V[i * d + j] = NAN;  // Standard deviation is zero, cannot divide
-                continue;
-            }
-
-            double std_dev = std::sqrt(variance);
-
-            V[i * d + j] = current_value / std_dev;
+            double cur = row[j];
+            if (std::isnan(cur) || total <= 2 || valid <= 1) { v_row[j] = NAN; continue; }
+            double var = (sum_sq - sum * sum / valid) / (valid - 1);
+            v_row[j] = (var <= 0.0) ? NAN : cur / std::sqrt(var);
         }
     }
 }
@@ -793,58 +785,34 @@ inline void ts_std_normalized_c(const double* A, double* V, std::size_t n, std::
  * // };
  * ```
  */
-inline void ts_zscore_c(const double* A, double* V, std::size_t n, std::size_t d,
+template<typename T>
+inline void ts_zscore_c(const T* A, T* V, std::size_t n, std::size_t d,
                         std::size_t days) {
-    for (size_t i = 0; i < n; ++i) {  // Iterate over rows
+    // Incremental: window is [j-days, j] inclusive (days+1 elements), output NaN for j < days
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(static)
+    #endif
+    for (size_t i = 0; i < n; ++i) {
         const double* row = A + i * d;
         double* v_row = V + i * d;
-        for (size_t j = 0; j < d; ++j) {  // Iterate over columns
-            if (j < days) {
-                v_row[j] = NAN;  // Not enough data to compute z-score
-                continue;
-            }
+        double sum = 0.0, sum_sq = 0.0;
+        int count = 0;
 
-            // Collect window values
-            std::vector<double> window;
-            for (int k = j - days; k <= static_cast<int>(j); ++k) {
-                double val = row[k];
-                if (!std::isnan(val)) {
-                    window.push_back(val);
-                }
+        for (size_t j = 0; j < d; ++j) {
+            // Add entering element
+            double val_in = row[j];
+            if (!std::isnan(val_in)) { sum += val_in; sum_sq += val_in * val_in; count++; }
+            // Remove leaving element (window start was j-days-1 in previous step)
+            if (j >= days + 1) {
+                double val_out = row[j - days - 1];
+                if (!std::isnan(val_out)) { sum -= val_out; sum_sq -= val_out * val_out; count--; }
             }
-
-            if (window.size() < 2) {
-                v_row[j] = NAN;  // Need at least two values to compute std deviation
-                continue;
-            }
-
-            // Compute mean
-            double sum = 0.0;
-            for (double val : window) {
-                sum += val;
-            }
-            double mean = sum / (window.size());
-
-            // Compute standard deviation
-            double sq_sum = 0.0;
-            for (double val : window) {
-                double diff = val - mean;
-                sq_sum += diff * diff;
-            }
-            double stddev = std::sqrt(sq_sum / (window.size() - 1));
-
-            if (stddev == 0.0) {
-                v_row[j] = NAN;  // Avoid division by zero
-                continue;
-            }
-
-            // Compute z-score for current value
-            double current_value = row[j];
-            if (std::isnan(current_value)) {
-                v_row[j] = NAN;
-                continue;
-            }
-            v_row[j] = (current_value - mean) / stddev;
+            if (j < days) { v_row[j] = NAN; continue; }
+            double cur = row[j];
+            if (std::isnan(cur) || count < 2) { v_row[j] = NAN; continue; }
+            double mean = sum / count;
+            double var = (sum_sq - sum * sum / count) / (count - 1);
+            v_row[j] = (var <= 0.0) ? NAN : (cur - mean) / std::sqrt(var);
         }
     }
 }
@@ -878,7 +846,8 @@ inline void ts_zscore_c(const double* A, double* V, std::size_t n, std::size_t d
  * // };
  * ```
  */
-inline void ts_delay_c(const double* A, double* V, int n, int d, int days) {
+template<typename T>
+inline void ts_delay_c(const T* A, T* V, int n, int d, int days) {
     for (int i = 0; i < n; ++i) {
         const double* A_row = A + i * d;
         double* V_row = V + i * d;
@@ -923,7 +892,11 @@ inline void ts_delay_c(const double* A, double* V, int n, int d, int days) {
  * // };
  * ```
  */
-inline void ts_min_c(const double* A, double* V, int n, int d, int days) {
+template<typename T>
+inline void ts_min_c(const T* A, T* V, int n, int d, int days) {
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(static)
+    #endif
     for (int i = 0; i < n; ++i) {      // Rows
         for (int t = 0; t < d; ++t) {  // Columns
             if (!std::isfinite(A[i * d + t])) {
@@ -985,7 +958,11 @@ inline void ts_min_c(const double* A, double* V, int n, int d, int days) {
  * // };
  * ```
  */
-inline void ts_median_c(const double* A, double* V, int n, int d, int days) {
+template<typename T>
+inline void ts_median_c(const T* A, T* V, int n, int d, int days) {
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(static)
+    #endif
     for (int i = 0; i < n; ++i) {      // Rows
         for (int t = 0; t < d; ++t) {  // Columns
             if (std::isnan(A[i * d + t])) {
@@ -1049,30 +1026,31 @@ inline void ts_median_c(const double* A, double* V, int n, int d, int days) {
  * // };
  * ```
  */
-inline void ts_mean_c(const double* A, double* V, int n, int d, int days) {
-    for (int i = 0; i < n; ++i) {      // Rows
-        for (int t = 0; t < d; ++t) {  // Columns
-            if (!std::isfinite(A[i * d + t])) {
-                V[i * d + t] = NAN;  // Preserve NaN and infinities
-                continue;
-            }
-            int window_start = std::max(0, t - days + 1);
-            double sum = 0.0;
-            int count = 0;
-            int valid_count = 0;
-            for (int k = window_start; k <= t; ++k) {
-                double val = A[i * d + k];
-                if (std::isfinite(val)) {
-                    sum += val;
-                    valid_count++;
-                }
-                count++;
-            }
+template<typename T>
+inline void ts_mean_c(const T* A, T* V, int n, int d, int days) {
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(static)
+    #endif
+    for (int i = 0; i < n; ++i) {
+        const double* row = A + i * d;
+        double* v_row = V + i * d;
+        double sum = 0.0;
+        int valid = 0;
 
-            if (count == days) {
-                V[i * d + t] = sum / valid_count;
+        for (int t = 0; t < d; ++t) {
+            // Add entering element
+            double val_in = row[t];
+            if (std::isfinite(val_in)) { sum += val_in; valid++; }
+            // Remove leaving element
+            if (t >= days) {
+                double val_out = row[t - days];
+                if (std::isfinite(val_out)) { sum -= val_out; valid--; }
+            }
+            // Output: require full window and current element finite
+            if (t < days - 1 || !std::isfinite(val_in) || valid == 0) {
+                v_row[t] = NAN;
             } else {
-                V[i * d + t] = NAN;
+                v_row[t] = sum / valid;
             }
         }
     }
@@ -1108,7 +1086,11 @@ inline void ts_mean_c(const double* A, double* V, int n, int d, int days) {
  * // };
  * ```
  */
-inline void ts_max_c(const double* A, double* V, int n, int d, int days) {
+template<typename T>
+inline void ts_max_c(const T* A, T* V, int n, int d, int days) {
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(static)
+    #endif
     for (int i = 0; i < n; ++i) {      // Rows
         for (int t = 0; t < d; ++t) {  // Columns
             if (!std::isfinite(A[i * d + t])) {
@@ -1167,7 +1149,11 @@ inline void ts_max_c(const double* A, double* V, int n, int d, int days) {
  * // };
  * ```
  */
-inline void ts_fill_c(const double* A, double* V, int n, int d) {
+template<typename T>
+inline void ts_fill_c(const T* A, T* V, int n, int d) {
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(static)
+    #endif
     for (int i = 0; i < n; ++i) {
         const double* A_row = A + i * d;
         double* V_row = V + i * d;
@@ -1217,50 +1203,37 @@ inline void ts_fill_c(const double* A, double* V, int n, int d) {
  * // };
  * ```
  */
-inline void ts_mean_exp_c(const double* A, double* V, int n, int d, int days, double exp_factor) {
-    for (int i = 0; i < n; ++i) {      // Iterate over rows
-        for (int t = 0; t < d; ++t) {  // Iterate over columns
-            int window_start = std::max(0, t - days + 1);
-            int window_end = t;
+template<typename T>
+inline void ts_mean_exp_c(const T* A, T* V, int n, int d, int days, double exp_factor) {
+    // Precompute weight table once: w[k] = (1-alpha)^k, for k = 0..days-1
+    double alpha = exp_factor;
+    double decay = 1.0 - alpha;
+    std::vector<double> w_table(days);
+    w_table[0] = 1.0;
+    for (int k = 1; k < days; ++k) w_table[k] = w_table[k-1] * decay;
 
-            std::vector<double> window_values;
-            std::vector<double> weights;
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(static)
+    #endif
+    for (int i = 0; i < n; ++i) {
+        const double* row = A + i * d;
+        double* v_row = V + i * d;
 
-            // Collect valid window values and compute weights
-            for (int k = window_start; k <= window_end; ++k) {
-                double val = A[i * d + k];
-                if (std::isfinite(val)) {  // Exclude NaN and infinities
-                    window_values.push_back(val);
+        for (int t = 0; t < d; ++t) {
+            if (!std::isfinite(row[t])) { v_row[t] = NAN; continue; }
+
+            int ws = std::max(0, t - days + 1);
+            double wsum = 0.0, vsum = 0.0;
+            // Most recent element gets weight w_table[0]=1, oldest gets w_table[t-ws]
+            for (int k = ws; k <= t; ++k) {
+                double val = row[k];
+                if (std::isfinite(val)) {
+                    double w = w_table[t - k];
+                    wsum += w;
+                    vsum += w * val;
                 }
             }
-
-            int N = window_values.size();
-
-            if (N == 0 || !std::isfinite(A[i * d + t])) {
-                V[i * d + t] = NAN;
-                continue;
-            }
-
-            // Compute weights
-            double sum_weights = 0.0;
-            for (int k = 0; k < N; ++k) {
-                double weight = pow(1.0 - exp_factor, N - 1 - k);
-                weights.push_back(weight);
-                sum_weights += weight;
-            }
-
-            // Normalize weights
-            for (int k = 0; k < N; ++k) {
-                weights[k] /= sum_weights;
-            }
-
-            // Compute weighted average
-            double weighted_sum = 0.0;
-            for (int k = 0; k < N; ++k) {
-                weighted_sum += window_values[k] * weights[k];
-            }
-
-            V[i * d + t] = weighted_sum;
+            v_row[t] = (wsum > 0.0) ? vsum / wsum : NAN;
         }
     }
 }
@@ -1295,7 +1268,8 @@ inline void ts_mean_exp_c(const double* A, double* V, int n, int d, int days, do
  * // };
  * ```
  */
-inline void ts_diff_c(const double* A, double* V, size_t n_rows, size_t n_cols, int order) {
+template<typename T>
+inline void ts_diff_c(const T* A, T* V, size_t n_rows, size_t n_cols, int order) {
     // Base case: order == 1
     if (order == 1) {
         for (size_t i = 0; i < n_rows; ++i) {
@@ -1313,7 +1287,7 @@ inline void ts_diff_c(const double* A, double* V, size_t n_rows, size_t n_cols, 
         }
     } else if (order > 1) {
         // Allocate temporary array to hold intermediate results
-        double* temp = new double[n_rows * n_cols];
+        T* temp = new T[n_rows * n_cols];
 
         // Compute the first difference
         ts_diff_c(A, temp, n_rows, n_cols, 1);
@@ -1324,7 +1298,7 @@ inline void ts_diff_c(const double* A, double* V, size_t n_rows, size_t n_cols, 
         delete[] temp;
     } else {
         // If order <= 0, copy A to V
-        std::copy(A, A + n_rows * n_cols, V);
+        std::copy(A, A + static_cast<std::ptrdiff_t>(n_rows * n_cols), V);
     }
 }
 
@@ -1371,59 +1345,40 @@ inline void ts_diff_c(const double* A, double* V, size_t n_rows, size_t n_cols, 
  * // };
  * ```
  */
-inline void ts_corr_binary_c(const double* A, const double* B, double* V, int n, int d, int days) {
-    // For each row
+template<typename T>
+inline void ts_corr_binary_c(const T* A, const T* B, T* V, int n, int d, int days) {
+    // Incremental correlation using running sums: sumA, sumB, sumA2, sumB2, sumAB
+    // Window [t-days+1, t], requires full window
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(static)
+    #endif
     for (int i = 0; i < n; ++i) {
-        // For each column
+        const double* rowA = A + i * d;
+        const double* rowB = B + i * d;
+        double* v_row = V + i * d;
+        double sA = 0, sB = 0, sA2 = 0, sB2 = 0, sAB = 0;
+        int cnt = 0;
+
         for (int t = 0; t < d; ++t) {
-            int window_start = std::max(0, t - days + 1);
-            int window_end = t;
-            int window_size = window_end - window_start + 1;
-
-            // If window size is less than the specified days, set result to NaN
-            if (window_size < days) {
-                V[i * d + t] = NAN;
-                continue;
+            // Add entering pair
+            double a = rowA[t], b = rowB[t];
+            if (!std::isnan(a) && !std::isnan(b)) {
+                sA += a; sB += b; sA2 += a*a; sB2 += b*b; sAB += a*b; cnt++;
             }
-
-            // Collect window data excluding NaNs
-            std::vector<double> vecA;
-            std::vector<double> vecB;
-            for (int k = window_start; k <= window_end; ++k) {
-                double valA = A[i * d + k];
-                double valB = B[i * d + k];
-                if (!std::isnan(valA) && !std::isnan(valB)) {
-                    vecA.push_back(valA);
-                    vecB.push_back(valB);
+            // Remove leaving pair
+            if (t >= days) {
+                double ao = rowA[t - days], bo = rowB[t - days];
+                if (!std::isnan(ao) && !std::isnan(bo)) {
+                    sA -= ao; sB -= bo; sA2 -= ao*ao; sB2 -= bo*bo; sAB -= ao*bo; cnt--;
                 }
             }
-
-            if (vecA.size() < 2) {
-                V[i * d + t] = NAN;
-                continue;
-            }
-
-            // Compute means
-            double meanA = std::accumulate(vecA.begin(), vecA.end(), 0.0) / vecA.size();
-            double meanB = std::accumulate(vecB.begin(), vecB.end(), 0.0) / vecB.size();
-
-            // Compute covariance and variances
-            double cov = 0.0;
-            double varA = 0.0;
-            double varB = 0.0;
-            for (size_t idx = 0; idx < vecA.size(); ++idx) {
-                double diffA = vecA[idx] - meanA;
-                double diffB = vecB[idx] - meanB;
-                cov += diffA * diffB;
-                varA += diffA * diffA;
-                varB += diffB * diffB;
-            }
-
-            if (varA == 0.0 || varB == 0.0) {
-                V[i * d + t] = 0.0;
-            } else {
-                V[i * d + t] = cov / std::sqrt(varA * varB);
-            }
+            if (t - days + 1 < 0 || cnt < 2) { v_row[t] = NAN; continue; }
+            // corr = (n*sumAB - sumA*sumB) / sqrt((n*sumA2 - sumA^2)*(n*sumB2 - sumB^2))
+            double num = cnt * sAB - sA * sB;
+            double dA = cnt * sA2 - sA * sA;
+            double dB = cnt * sB2 - sB * sB;
+            if (dA <= 0.0 || dB <= 0.0) { v_row[t] = 0.0; }
+            else { v_row[t] = num / std::sqrt(dA * dB); }
         }
     }
 }
@@ -1458,7 +1413,11 @@ inline void ts_corr_binary_c(const double* A, const double* B, double* V, int n,
  * // };
  * ```
  */
-inline void ts_sum_c(const double* A, double* V, int n, int d, int days) {
+template<typename T>
+inline void ts_sum_c(const T* A, T* V, int n, int d, int days) {
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(static)
+    #endif
     for (int i = 0; i < n; ++i) {  // Iterate over each row
         // Initialize cumulative sum array for the current row
         std::vector<double> cumulative_sum(d + 1, 0.0);
@@ -1508,50 +1467,29 @@ inline void ts_sum_c(const double* A, double* V, int n, int d, int days) {
  * // };
  * ```
  */
-inline void ts_std_c(const double* A, double* V, size_t n, size_t d, int days) {
-    for (size_t i = 0; i < n; ++i) {      // Iterate over rows
-        for (size_t j = 0; j < d; ++j) {  // Iterate over columns
-            int window_start = static_cast<int>(j) - days + 1;
-            if (window_start < 0) {
-                V[i * d + j] = NAN;
-                continue;
-            }
+template<typename T>
+inline void ts_std_c(const T* A, T* V, size_t n, size_t d, int days) {
+    // Incremental: window [j-days+1, j], requires full window
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(static)
+    #endif
+    for (size_t i = 0; i < n; ++i) {
+        const double* row = A + i * d;
+        double* v_row = V + i * d;
+        double sum = 0.0, sum_sq = 0.0;
+        int count = 0;
 
-            std::vector<double> window_values;
-            double val;
-            for (int k = window_start; k <= static_cast<int>(j); ++k) {
-                val = A[i * d + k];
-                if (!std::isnan(val)) {
-                    window_values.push_back(val);
-                }
+        for (size_t j = 0; j < d; ++j) {
+            double val_in = row[j];
+            if (!std::isnan(val_in)) { sum += val_in; sum_sq += val_in * val_in; count++; }
+            if (static_cast<int>(j) >= days) {
+                double val_out = row[j - days];
+                if (!std::isnan(val_out)) { sum -= val_out; sum_sq -= val_out * val_out; count--; }
             }
-
-            size_t N = window_values.size();
-            if (N <= 1) {
-                V[i * d + j] = NAN;
-                continue;
-            }
-            if (std::isnan(val)) {
-                V[i * d + j] = NAN;
-                continue;
-            }
-
-            // Compute mean
-            double sum = 0.0;
-            for (double val : window_values) {
-                sum += val;
-            }
-            double mean = sum / N;
-
-            // Compute variance (sample variance)
-            double sq_diff_sum = 0.0;
-            for (double val : window_values) {
-                sq_diff_sum += (val - mean) * (val - mean);
-            }
-            double variance = sq_diff_sum / (N - 1);
-
-            // Compute standard deviation
-            V[i * d + j] = std::sqrt(variance);
+            int ws = static_cast<int>(j) - days + 1;
+            if (ws < 0 || count <= 1 || std::isnan(row[j])) { v_row[j] = NAN; continue; }
+            double var = (sum_sq - sum * sum / count) / (count - 1);
+            v_row[j] = std::sqrt(std::max(0.0, var));
         }
     }
 }
@@ -1586,7 +1524,11 @@ inline void ts_std_c(const double* A, double* V, size_t n, size_t d, int days) {
  * // };
  * ```
  */
-inline void ts_skew_c(const double* A, double* V, int n, int d, int days) {
+template<typename T>
+inline void ts_skew_c(const T* A, T* V, int n, int d, int days) {
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(static)
+    #endif
     for (int i = 0; i < n; ++i) {
         const double* A_row = A + i * d;
         double* V_row = V + i * d;
@@ -1675,52 +1617,75 @@ inline void ts_skew_c(const double* A, double* V, int n, int d, int days) {
  * // };
  * ```
  */
-inline void ts_rank_c(const double* A, double* V, int n, int d, int days) {
-    for (int i = 0; i < n; ++i) {
-        const double* A_row = A + i * d;
-        double* V_row = V + i * d;
+template<typename T>
+inline void ts_rank_c(const T* A, T* V, int n, int d, int days) {
+    // Sorted contiguous arrays replace std::map for cache-friendly sliding-window rank.
+    // Two parallel arrays: vals[] (sorted unique values), cnts[] (occurrence counts).
+    // Insert/remove via std::lower_bound + std::memmove; rank = insert position.
+    #ifdef _OPENMP
+    #pragma omp parallel
+    {
+    #endif
+        // Per-thread buffers, allocated once outside the row loop
+        std::vector<double> vals_buf(days);
+        std::vector<int>    cnts_buf(days);
 
-        for (int t = 0; t < d; ++t) {
-            if (std::isnan(A_row[t])) {
-                V_row[t] = NAN;
-                continue;
-            }
+    #ifdef _OPENMP
+        #pragma omp for schedule(static)
+    #endif
+        for (int i = 0; i < n; ++i) {
+            const T* A_row = A + i * d;
+            T*       V_row = V + i * d;
+            double*  vp = vals_buf.data();
+            int*     cp = cnts_buf.data();
+            int nu = 0;     // number of unique values in window
 
-            int window_start = std::max(0, t - days + 1);
-            int window_end = t;
-
-            std::vector<double> window_values;
-            for (int k = window_start; k <= window_end; ++k) {
-                if (!std::isnan(A_row[k])) {
-                    window_values.push_back(A_row[k]);
+            for (int t = 0; t < d; ++t) {
+                // --- Remove leaving element first ---
+                if (t >= days) {
+                    double val_out = static_cast<double>(A_row[t - days]);
+                    if (!std::isnan(val_out)) {
+                        double* pos = std::lower_bound(vp, vp + nu, val_out);
+                        int idx = static_cast<int>(pos - vp);
+                        if (--cp[idx] == 0) {
+                            int tail = nu - idx - 1;
+                            if (tail > 0) {
+                                std::memmove(vp + idx, vp + idx + 1, tail * sizeof(double));
+                                std::memmove(cp + idx, cp + idx + 1, tail * sizeof(int));
+                            }
+                            nu--;
+                        }
+                    }
                 }
+
+                // --- Insert entering element and compute rank ---
+                double val_in = static_cast<double>(A_row[t]);
+                if (std::isnan(val_in)) { V_row[t] = NAN; continue; }
+
+                double* pos = std::lower_bound(vp, vp + nu, val_in);
+                int idx = static_cast<int>(pos - vp);
+
+                if (idx < nu && vp[idx] == val_in) {
+                    cp[idx]++;
+                } else {
+                    int tail = nu - idx;
+                    if (tail > 0) {
+                        std::memmove(vp + idx + 1, vp + idx, tail * sizeof(double));
+                        std::memmove(cp + idx + 1, cp + idx, tail * sizeof(int));
+                    }
+                    vp[idx] = val_in;
+                    cp[idx] = 1;
+                    nu++;
+                }
+
+                if (nu == 1) { V_row[t] = 1.5; continue; }
+                // idx = count of unique values strictly less than val_in
+                V_row[t] = 1.0 + static_cast<double>(idx) / (nu - 1);
             }
-
-            if (window_values.empty()) {
-                V_row[t] = NAN;
-                continue;
-            }
-
-            // Get unique values and sort them in ascending order
-            std::set<double> unique_values_set(window_values.begin(), window_values.end());
-            std::vector<double> unique_values(unique_values_set.begin(), unique_values_set.end());
-
-            size_t num_unique = unique_values.size();
-            double rank;
-
-            if (num_unique == 1) {
-                rank = 1.5;  // Assign rank 1.5 when only one unique value
-            } else {
-                // Map values to ranks between 1 and 2
-                auto it = std::find(unique_values.begin(), unique_values.end(), A_row[t]);
-                size_t index = std::distance(unique_values.begin(), it);
-
-                rank = 1.0 + ((static_cast<double>(index)) / (num_unique - 1)) * (2.0 - 1.0);
-            }
-
-            V_row[t] = rank;
         }
+    #ifdef _OPENMP
     }
+    #endif
 }
 }  // namespace tsop
 #endif  // TSOP_BASIC_H
