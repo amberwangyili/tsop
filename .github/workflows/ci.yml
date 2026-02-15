@@ -62,7 +62,6 @@ jobs:
         CIBW_BUILD: "cp38-* cp39-* cp310-* cp311-*"
         CIBW_SKIP: "*-musllinux_*"
         CIBW_BEFORE_BUILD: "pip install numpy cython"
-        CIBW_BEFORE_BUILD_MACOS: "brew install libomp && pip install numpy cython"
         CIBW_ARCHS_MACOS: "arm64"
         CIBW_ARCHS_LINUX: "x86_64"
         CIBW_ARCHS_WINDOWS: "AMD64"
