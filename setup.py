@@ -14,17 +14,23 @@ msvc_compile_args = ["/std:c++17", "/EHsc"]
 
 # GCC/Clang flags for Unix-like systems (with OpenMP)
 if sys.platform == "darwin":
-    # macOS: find libomp from Homebrew
-    if platform.machine() == "arm64":
-        omp_prefix = "/opt/homebrew/opt/libomp"
+    # macOS: find libomp from Homebrew (check both arm64 and x86_64 paths)
+    omp_prefix = None
+    for candidate in ["/opt/homebrew/opt/libomp", "/usr/local/opt/libomp"]:
+        if os.path.isfile(os.path.join(candidate, "include", "omp.h")):
+            omp_prefix = candidate
+            break
+    if omp_prefix:
+        unix_compile_args = [
+            "-std=c++17", "-Wall", "-Wextra", "-O3",
+            "-Xpreprocessor", "-fopenmp",
+            f"-I{omp_prefix}/include",
+        ]
+        unix_link_args = ["-g", f"-L{omp_prefix}/lib", "-lomp"]
     else:
-        omp_prefix = "/usr/local/opt/libomp"
-    unix_compile_args = [
-        "-std=c++17", "-Wall", "-Wextra", "-O3",
-        "-Xpreprocessor", "-fopenmp",
-        f"-I{omp_prefix}/include",
-    ]
-    unix_link_args = ["-g", f"-L{omp_prefix}/lib", "-lomp"]
+        # OpenMP not found, build without it
+        unix_compile_args = ["-std=c++17", "-Wall", "-Wextra", "-O3"]
+        unix_link_args = ["-g"]
 else:
     unix_compile_args = ["-std=c++17", "-Wall", "-Wextra", "-O3", "-fopenmp"]
     unix_link_args = ["-g", "-lgomp"]
